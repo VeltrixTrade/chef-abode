@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TradingView Analyzer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; min-height: 100vh; }
+.header { background: linear-gradient(135deg, #16213e, #0f3460); padding: 18px 30px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1a3a6a; }
+.header h1 { font-size: 20px; color: #e94560; font-weight: 700; }
+.header span { color: #888; font-size: 13px; }
+.controls { background: #16213e; padding: 15px 30px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #1a3a6a; }
+.controls label { font-size: 13px; color: #aaa; }
+.controls select, .controls button { padding: 8px 16px; border-radius: 6px; border: 1px solid #2a4a7a; background: #0f3460; color: #fff; font-size: 14px; cursor: pointer; }
+.controls select:focus { outline: none; border-color: #e94560; }
+.controls button { background: #e94560; border-color: #e94560; font-weight: 600; transition: 0.2s; }
+.controls button:hover { background: #d63851; }
+.controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+.controls .status-badge { font-size: 12px; padding: 4px 12px; border-radius: 12px; background: #1a3a6a; color: #888; }
+.controls .status-badge.running { background: #e94560; color: #fff; animation: pulse 1.5s infinite; }
+.controls .status-badge.done { background: #2ecc71; color: #fff; }
+.controls .status-badge.error { background: #e74c3c; color: #fff; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+.main { display: flex; height: calc(100vh - 110px); }
+.chart-panel { flex: 1; min-width: 0; }
+.chart-panel iframe { width: 100%; height: 100%; border: none; }
+.results-panel { width: 420px; min-width: 420px; background: #16213e; border-right: 1px solid #1a3a6a; overflow-y: auto; padding: 20px; }
+.results-panel h2 { font-size: 16px; color: #e94560; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #1a3a6a; }
+.result-section { margin-bottom: 16px; }
+.result-section h3 { font-size: 13px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+.result-section .content { font-size: 13px; line-height: 1.7; color: #ccc; white-space: pre-wrap; background: #0d1b36; padding: 12px; border-radius: 6px; border: 1px solid #1a3a6a; max-height: 300px; overflow-y: auto; }
+.result-section .content.decision { font-size: 18px; font-weight: 700; text-align: center; padding: 20px; }
+.decision.buy { color: #2ecc71; border-color: #2ecc71; }
+.decision.sell { color: #e74c3c; border-color: #e74c3c; }
+.decision.hold { color: #f39c12; border-color: #f39c12; }
+.placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: #555; text-align: center; gap: 12px; }
+.placeholder svg { opacity: 0.3; }
+.placeholder p { font-size: 14px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>TradingView Analyzer</h1>
+  <span>AI Multi-Agent Market Analysis</span>
+</div>
+
+<div class="controls">
+  <label>الزوج / السهم</label>
+  <select id="tickerSelect"></select>
+
+  <label>مزود LLM</label>
+  <select id="providerSelect">
+    <option value="google">Google Gemini</option>
+    <option value="openai">OpenAI GPT</option>
+    <option value="anthropic">Anthropic Claude</option>
+    <option value="deepseek">DeepSeek</option>
+    <option value="groq">Groq</option>
+  </select>
+
+  <button id="analyzeBtn">🔍 تحليل</button>
+  <span id="statusBadge" class="status-badge">جاهز</span>
+</div>
+
+<div class="main">
+  <div class="results-panel" id="resultsPanel">
+    <h2>نتائج التحليل</h2>
+    <div id="resultsContent">
+      <div class="placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        <p>اختر زوجاً أو سهماً<br>ثم اضغط "تحليل"</p>
+      </div>
+    </div>
+  </div>
+  <div class="chart-panel">
+    <div id="tvchart"></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/tradingview-lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const PAIRS = [
+  { label: "EUR/USD", tv: "FX:EURUSD", yahoo: "EURUSD=X", category: "فوركس" },
+  { label: "GBP/USD", tv: "FX:GBPUSD", yahoo: "GBPUSD=X", category: "فوركس" },
+  { label: "USD/JPY", tv: "FX:USDJPY", yahoo: "USDJPY=X", category: "فوركس" },
+  { label: "USD/CHF", tv: "FX:USDCHF", yahoo: "USDCHF=X", category: "فوركس" },
+  { label: "AUD/USD", tv: "FX:AUDUSD", yahoo: "AUDUSD=X", category: "فوركس" },
+  { label: "USD/CAD", tv: "FX:USDCAD", yahoo: "USDCAD=X", category: "فوركس" },
+  { label: "NZD/USD", tv: "FX:NZDUSD", yahoo: "NZDUSD=X", category: "فوركس" },
+  { label: "GBP/JPY", tv: "FX:GBPJPY", yahoo: "GBPJPY=X", category: "فوركس" },
+  { label: "EUR/JPY", tv: "FX:EURJPY", yahoo: "EURJPY=X", category: "فوركس" },
+  { label: "", tv: "---", yahoo: "", category: "─── أسهم ───" },
+  { label: "Apple", tv: "NASDAQ:AAPL", yahoo: "AAPL", category: "أسهم" },
+  { label: "Tesla", tv: "NASDAQ:TSLA", yahoo: "TSLA", category: "أسهم" },
+  { label: "NVIDIA", tv: "NASDAQ:NVDA", yahoo: "NVDA", category: "أسهم" },
+  { label: "Microsoft", tv: "NASDAQ:MSFT", yahoo: "MSFT", category: "أسهم" },
+  { label: "Amazon", tv: "NASDAQ:AMZN", yahoo: "AMZN", category: "أسهم" },
+  { label: "Google", tv: "NASDAQ:GOOGL", yahoo: "GOOGL", category: "أسهم" },
+  { label: "Meta", tv: "NASDAQ:META", yahoo: "META", category: "أسهم" },
+  { label: "S&P 500", tv: "FOREXCOM:SPX500", yahoo: "^GSPC", category: "مؤشرات" },
+  { label: "Nasdaq", tv: "NASDAQ:NDX", yahoo: "^IXIC", category: "مؤشرات" },
+  { label: "Gold", tv: "FOREXCOM:XAUUSD", yahoo: "GC=F", category: "سلع" },
+  { label: "Oil", tv: "FOREXCOM:USOIL", yahoo: "CL=F", category: "سلع" },
+  { label: "", tv: "---", yahoo: "", category: "─── عملات رقمية ───" },
+  { label: "Bitcoin", tv: "COINBASE:BTCUSD", yahoo: "BTC-USD", category: "عملات رقمية" },
+  { label: "Ethereum", tv: "COINBASE:ETHUSD", yahoo: "ETH-USD", category: "عملات رقمية" },
+  { label: "Solana", tv: "COINBASE:SOLUSD", yahoo: "SOL-USD", category: "عملات رقمية" },
+  { label: "XRP", tv: "COINBASE:XRPUSD", yahoo: "XRP-USD", category: "عملات رقمية" },
+  { label: "Dogecoin", tv: "COINBASE:DOGEUSD", yahoo: "DOGE-USD", category: "عملات رقمية" },
+];
+const select = document.getElementById("tickerSelect");
+let currentCategory = "";
+PAIRS.forEach(p => {
+  const opt = document.createElement("option");
+  if (p.category && p.category !== currentCategory) {
+    currentCategory = p.category;
+    const group = document.createElement("optgroup");
+    group.label = p.category;
+    document.getElementById("tickerSelect").appendChild(group);
+  }
+  if (!p.tv.startsWith("---")) {
+    opt.value = p.yahoo;
+    opt.textContent = p.label;
+    opt.dataset.tv = p.tv;
+    const groups = select.querySelectorAll("optgroup");
+    groups[groups.length - 1].appendChild(opt);
+  }
+});
+select.value = "EURUSD=X";
+
+let tvWidget = null;
+const container = document.getElementById("tvchart");
+
+function initTradingView(tvSymbol) {
+  if (tvWidget) { tvWidget.remove(); tvWidget = null; }
+  container.innerHTML = "";
+  const script = document.createElement("script");
+  script.src = "https://s3.tradingview.com/tv.js";
+  script.async = true;
+  script.onload = () => {
+    tvWidget = new TradingView.widget({
+      container_id: "tvchart",
+      symbol: tvSymbol,
+      interval: "D",
+      timezone: "Etc/UTC",
+      theme: "dark",
+      style: "1",
+      locale: "ar",
+      toolbar_bg: "#16213e",
+      enable_publishing: false,
+      allow_symbol_change: true,
+      hide_side_toolbar: false,
+      width: "100%",
+      height: "100%",
+    });
+  };
+  document.head.appendChild(script);
+}
+
+select.addEventListener("change", () => {
+  const opt = select.options[select.selectedIndex];
+  if (opt && opt.dataset && opt.dataset.tv) {
+    initTradingView(opt.dataset.tv);
+  }
+});
+
+initTradingView("FX:EURUSD");
+
+const analyzeBtn = document.getElementById("analyzeBtn");
+const statusBadge = document.getElementById("statusBadge");
+const resultsContent = document.getElementById("resultsContent");
+let currentTaskId = null;
+
+analyzeBtn.addEventListener("click", async () => {
+  const ticker = select.value;
+  const provider = document.getElementById("providerSelect").value;
+  if (!ticker) return;
+
+  analyzeBtn.disabled = true;
+  statusBadge.textContent = "جاري التحليل...";
+  statusBadge.className = "status-badge running";
+  resultsContent.innerHTML = `<div class="placeholder"><p>⏳ جاري تحليل ${select.options[select.selectedIndex].textContent} بواسطة فريق الذكاء الاصطناعي...</p></div>`;
+
+  try {
+    const resp = await fetch(`/analyze?ticker=${ticker}&llm_provider=${provider}`, { method: "POST" });
+    const data = await resp.json();
+    currentTaskId = data.task_id;
+    pollResult(currentTaskId);
+  } catch (err) {
+    statusBadge.textContent = "خطأ";
+    statusBadge.className = "status-badge error";
+    resultsContent.innerHTML = `<div class="placeholder"><p style="color:#e74c3c;">❌ فشل الاتصال بالخادم</p></div>`;
+    analyzeBtn.disabled = false;
+  }
+});
+
+async function pollResult(taskId) {
+  try {
+    const resp = await fetch(`/result/${taskId}`);
+    const data = await resp.json();
+
+    if (data.status === "running") {
+      setTimeout(() => pollResult(taskId), 3000);
+      return;
+    }
+
+    analyzeBtn.disabled = false;
+
+    if (data.status === "error") {
+      statusBadge.textContent = "خطأ";
+      statusBadge.className = "status-badge error";
+      resultsContent.innerHTML = `<div class="placeholder"><p style="color:#e74c3c;">❌ ${data.result}</p></div>`;
+      return;
+    }
+
+    statusBadge.textContent = "اكتمل";
+    statusBadge.className = "status-badge done";
+    renderResults(data.result);
+  } catch {
+    setTimeout(() => pollResult(taskId), 3000);
+  }
+}
+
+function renderResults(result) {
+  if (!result) {
+    resultsContent.innerHTML = `<div class="placeholder"><p>لا توجد نتائج</p></div>`;
+    return;
+  }
+
+  const action = (result.action || "hold").toLowerCase();
+  const actionClass = action === "buy" ? "buy" : action === "sell" ? "sell" : "hold";
+  const actionEmoji = action === "buy" ? "🟢" : action === "sell" ? "🔴" : "🟡";
+
+  let html = `
+    <div class="result-section">
+      <h3>📊 القرار</h3>
+      <div class="content decision ${actionClass}">${actionEmoji} ${action.toUpperCase()}</div>
+    </div>
+  `;
+
+  if (result.reasoning) {
+    html += `
+      <div class="result-section">
+        <h3>📝 التحليل</h3>
+        <div class="content">${escapeHtml(result.reasoning)}</div>
+      </div>
+    `;
+  }
+
+  if (result.confidence) {
+    html += `
+      <div class="result-section">
+        <h3>🎯 الثقة</h3>
+        <div class="content">${result.confidence}%</div>
+      </div>
+    `;
+  }
+
+  if (result.risk) {
+    html += `
+      <div class="result-section">
+        <h3>⚠️ المخاطرة</h3>
+        <div class="content">${escapeHtml(result.risk)}</div>
+      </div>
+    `;
+  }
+
+  if (result.details) {
+    html += `
+      <div class="result-section">
+        <h3>🔍 تفاصيل</h3>
+        <div class="content">${escapeHtml(JSON.stringify(result.details, null, 2))}</div>
+      </div>
+    `;
+  }
+
+  resultsContent.innerHTML = html;
+}
+
+function escapeHtml(text) {
+  if (!text) return "";
+  return String(text).replace(/[&<>"']/g, function(m) {
+    if (m === '&') return '&amp;';
+    if (m === '<') return '&lt;';
+    if (m === '>') return '&gt;';
+    if (m === '"') return '&quot;';
+    return '&#039;';
+  });
+}
+</script>
+</body>
+</html>
